@@ -18,14 +18,11 @@ import org.springframework.transaction.annotation.Transactional;
 public class GroupServiceImpl implements GroupService {
     private final GroupRepository groupRepository;
     private final StudentRepository studentRepository;
-    private final GroupService self;
 
     @Autowired
-    public GroupServiceImpl(GroupRepository groupRepository,
-                            StudentRepository studentRepository, GroupService self) {
+    public GroupServiceImpl(GroupRepository groupRepository, StudentRepository studentRepository) {
         this.groupRepository = groupRepository;
         this.studentRepository = studentRepository;
-        this.self = self;
     }
 
     @Override
@@ -91,7 +88,7 @@ public class GroupServiceImpl implements GroupService {
     })
     @Transactional
     public void deleteGroup(Long id) {
-        Group group = self.findById(id);
+        Group group = findByIdInternal(id);
         if (group != null) {
             evictGroupByIdCache(group.getId());
         }
@@ -105,13 +102,20 @@ public class GroupServiceImpl implements GroupService {
     })
     @Transactional
     public void deleteGroupByName(String name) {
-        Group group = self.findByName(name);
+        Group group = findByNameInternal(name);
         if (group != null) {
             evictGroupByNameCache(group.getName());
         }
         groupRepository.deleteByName(name);
     }
 
+    private Group findByIdInternal(Long id) {
+        return groupRepository.findById(id).orElse(null);
+    }
+
+    private Group findByNameInternal(String name) {
+        return groupRepository.findByName(name).orElse(null);
+    }
 
     @CacheEvict(value = "groups", key = "'name_' + #name")
     public void evictGroupByNameCache(String name) {
