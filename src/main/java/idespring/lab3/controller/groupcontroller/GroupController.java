@@ -67,7 +67,9 @@ public class GroupController {
     public ResponseEntity<Void> deleteGroup(@Positive @NotNull @PathVariable Long groupId) {
         try {
             groupService.deleteGroup(groupId);
-            return new ResponseEntity<>(HttpStatus.OK);
+            return new ResponseEntity<>(HttpStatus.NO_CONTENT);
+        } catch (EntityNotFoundException e) {
+            return new ResponseEntity<>(HttpStatus.NOT_FOUND);
         } catch (Exception e) {
             return new ResponseEntity<>(HttpStatus.INTERNAL_SERVER_ERROR);
         }
@@ -77,7 +79,9 @@ public class GroupController {
     public ResponseEntity<Void> deleteGroupByName(@NotEmpty @PathVariable String name) {
         try {
             groupService.deleteGroupByName(name);
-            return new ResponseEntity<>(HttpStatus.OK);
+            return new ResponseEntity<>(HttpStatus.NO_CONTENT);
+        } catch (EntityNotFoundException e) {
+            return new ResponseEntity<>(HttpStatus.NOT_FOUND);
         } catch (Exception e) {
             return new ResponseEntity<>(HttpStatus.INTERNAL_SERVER_ERROR);
         }

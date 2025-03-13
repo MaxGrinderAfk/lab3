@@ -1,5 +1,6 @@
 package idespring.lab3.controller.markcontroller;
 
+import idespring.lab3.exceptions.SubjectNotAssignedException;
 import idespring.lab3.model.Mark;
 import idespring.lab3.service.markservice.MarkService;
 import jakarta.persistence.EntityNotFoundException;
@@ -24,8 +25,18 @@ public class MarkController {
     }
 
     @PostMapping
-    public ResponseEntity<Mark> createMark(@Valid @RequestBody Mark mark) {
-        return new ResponseEntity<>(markService.addMark(mark), HttpStatus.CREATED);
+    public ResponseEntity<?> createMark(@Valid @RequestBody Mark mark) {
+        try {
+            return new ResponseEntity<>(markService.addMark(mark), HttpStatus.CREATED);
+        } catch (SubjectNotAssignedException e) {
+            return ResponseEntity
+                    .status(HttpStatus.BAD_REQUEST)
+                    .body(e.getMessage());
+        } catch (EntityNotFoundException e) {
+            return ResponseEntity
+                    .status(HttpStatus.NOT_FOUND)
+                    .body(e.getMessage());
+        }
     }
 
     @GetMapping

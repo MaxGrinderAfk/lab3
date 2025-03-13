@@ -1,9 +1,6 @@
 package idespring.lab3.model;
 
-import com.fasterxml.jackson.annotation.JsonIdentityInfo;
-import com.fasterxml.jackson.annotation.JsonIdentityReference;
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
-import com.fasterxml.jackson.annotation.ObjectIdGenerators;
+import com.fasterxml.jackson.annotation.*;
 import jakarta.persistence.*;
 
 @Entity
@@ -81,7 +78,13 @@ public class Mark {
         return subject != null ? subject.getId() : null;
     }
 
-    public String getSubjectName() {
-        return subject != null ? subject.getName() : null;
+    @JsonIgnore
+    public Student getStudent() {
+        return student;
+    }
+
+    @JsonIgnore
+    public Subject getSubject() {
+        return subject;
     }
 }
