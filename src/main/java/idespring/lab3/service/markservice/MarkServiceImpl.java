@@ -1,5 +1,6 @@
 package idespring.lab3.service.markservice;
 
+import idespring.lab3.config.CacheConfig;
 import idespring.lab3.exceptions.SubjectNotAssignedException;
 import idespring.lab3.model.Mark;
 import idespring.lab3.model.Student;
@@ -12,9 +13,6 @@ import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.cache.annotation.CacheEvict;
-import org.springframework.cache.annotation.Cacheable;
-import org.springframework.cache.annotation.Caching;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -23,33 +21,38 @@ public class MarkServiceImpl implements MarkService {
     private final MarkRepository markRepository;
     private final StudentRepository studentRepository;
     private final SubjectRepository subjectRepository;
+    private final CacheConfig<String, Object> cache;
     private static final Logger logger = LoggerFactory.getLogger(MarkServiceImpl.class);
 
     @Autowired
     public MarkServiceImpl(MarkRepository markRepository,
                            StudentRepository studentRepository,
-                           SubjectRepository subjectRepository) {
+                           SubjectRepository subjectRepository,
+                           CacheConfig<String, Object> cache) {
         this.markRepository = markRepository;
         this.studentRepository = studentRepository;
         this.subjectRepository = subjectRepository;
+        this.cache = cache;
     }
 
     @Override
-    @Cacheable(value = "marks", key = "'marks-' + (#studentId != null ? #studentId : 'all') + '-' "
-            + "+ (#subjectId != null ? #subjectId : 'all')",
-            unless = "#result == null or #result.isEmpty()")
     public List<Mark> readMarks(Long studentId, Long subjectId) {
-        long start = System.nanoTime();
-        logger.info("Fetching marks for student: {}, subject: {}", studentId, subjectId);
+        String cacheKey = "marks-" + (studentId != null ? studentId : "all")
+                + "-" + (subjectId != null ? subjectId : "all");
+        List<Mark> cachedMarks = (List<Mark>) cache.get(cacheKey);
+        if (cachedMarks != null) {
+            return cachedMarks;
+        }
 
+        logger.info("Fetching marks for student: {}, subject: {}", studentId, subjectId);
         List<Mark> marks;
         if (studentId != null && subjectId != null) {
             Student student = studentRepository.findById(studentId)
-                    .orElseThrow(() -> new EntityNotFoundException(
-                            "Student not found with id: " + studentId));
+                    .orElseThrow(() ->
+                            new EntityNotFoundException("Student not found with id: " + studentId));
             Subject subject = subjectRepository.findById(subjectId)
-                    .orElseThrow(() -> new EntityNotFoundException(
-                            "Subject not found with id: " + subjectId));
+                    .orElseThrow(() ->
+                            new EntityNotFoundException("Subject not found with id: " + subjectId));
             marks = markRepository.findByStudentAndSubject(student, subject);
         } else if (studentId != null) {
             marks = markRepository.findByStudentId(studentId);
@@ -59,28 +62,50 @@ public class MarkServiceImpl implements MarkService {
             marks = markRepository.findAll();
         }
 
-        long end = System.nanoTime();
-        logger.info("Execution time for readMarks: {} ms", (end - start) / 1_000_000);
+        cache.put(cacheKey, marks);
         return marks;
     }
 
     @Override
-    @Cacheable(value = "marks", key = "'value-' + #value",
-            unless = "#result == null or #result.isEmpty()")
     public List<Mark> findByValue(int value) {
-        logger.info("Fetching marks with value: {}", value);
-        return markRepository.findByValue(value);
+        String cacheKey = "value-" + value;
+        List<Mark> cachedMarks = (List<Mark>) cache.get(cacheKey);
+        if (cachedMarks != null) {
+            return cachedMarks;
+        }
+
+        List<Mark> marks = markRepository.findByValue(value);
+        cache.put(cacheKey, marks);
+        return marks;
     }
 
     @Override
-    @Cacheable(value = "marks", key = "'avg-student-' + #studentId", unless = "#result == null")
     public Double getAverageMarkByStudentId(Long studentId) {
-        logger.info("Fetching average mark for student: {}", studentId);
-        return markRepository.getAverageMarkByStudentId(studentId);
+        String cacheKey = "avg-student-" + studentId;
+        Double cachedAvg = (Double) cache.get(cacheKey);
+        if (cachedAvg != null) {
+            return cachedAvg;
+        }
+
+        Double avgMark = markRepository.getAverageMarkByStudentId(studentId);
+        cache.put(cacheKey, avgMark);
+        return avgMark;
     }
 
     @Override
-    @CacheEvict(value = "marks", allEntries = true)
+    public Double getAverageMarkBySubjectId(Long subjectId) {
+        String cacheKey = "avg-subject-" + subjectId;
+        Double cachedAvg = (Double) cache.get(cacheKey);
+        if (cachedAvg != null) {
+            return cachedAvg;
+        }
+
+        Double avgMark = markRepository.getAverageMarkBySubjectId(subjectId);
+        cache.put(cacheKey, avgMark);
+        return avgMark;
+    }
+
+    @Override
     @Transactional
     public void deleteMarkSpecific(Long studentId, String subjectName, int markValue, Long id) {
         logger.info("Deleting specific mark for student: {}, subject: {}, value: {}, id: {}",
@@ -90,24 +115,14 @@ public class MarkServiceImpl implements MarkService {
         if (deletedCount == 0) {
             throw new EntityNotFoundException("Mark not found with the given criteria.");
         }
+        cache.remove("marks-" + studentId + "-" + subjectName);
+        cache.remove("avg-student-" + studentId);
+        cache.remove("avg-subject-" + subjectName);
     }
 
     @Override
-    @Cacheable(value = "marks", key = "'avg-subject-' + #subjectId", unless = "#result == null")
-    public Double getAverageMarkBySubjectId(Long subjectId) {
-        logger.info("Fetching average mark for subject: {}", subjectId);
-        return markRepository.getAverageMarkBySubjectId(subjectId);
-    }
-
-    @Override
-    @Caching(evict = {
-            @CacheEvict(value = "marks", key = "'avg-student-' + #mark.student.id"),
-            @CacheEvict(value = "marks", key = "'avg-subject-' + #mark.subject.id"),
-            @CacheEvict(value = "marks", allEntries = true)
-    })
     @Transactional
     public Mark addMark(Mark mark) {
-        long start = System.nanoTime();
         logger.info("Adding mark for student: {}, subject: {}, value: {}",
                 mark.getStudent().getId(), mark.getSubject().getId(), mark.getValue());
 
@@ -118,29 +133,27 @@ public class MarkServiceImpl implements MarkService {
                 .orElseThrow(() -> new EntityNotFoundException("Subject not found with id: "
                         + mark.getSubject().getId()));
 
-        boolean hasSubject = student.getSubjects().stream()
-                .anyMatch(s -> s.getId().equals(subject.getId()));
-
+        boolean hasSubject = student.getSubjects().stream().anyMatch(s ->
+                s.getId().equals(subject.getId()));
         if (!hasSubject) {
             throw new SubjectNotAssignedException("Student with ID " + student.getId()
                     + " does not have subject with ID " + subject.getId());
         }
 
-        Mark savedMark = markRepository.save(mark);
-
-        long end = System.nanoTime();
-        logger.info("Execution time for addMark: {} ms", (end - start) / 1_000_000);
+        final Mark savedMark = markRepository.save(mark);
+        cache.remove("marks-" + student.getId() + "-" + subject.getId());
+        cache.remove("avg-student-" + student.getId());
+        cache.remove("avg-subject-" + subject.getId());
         return savedMark;
     }
 
     @Override
     @Transactional
-    @Caching(evict = {
-            @CacheEvict(value = "marks", key = "#id"),
-            @CacheEvict(value = "marks", allEntries = true)
-    })
     public void deleteMark(Long id) {
         logger.info("Deleting mark with id: {}", id);
         markRepository.deleteById(id);
+        cache.remove("marks-" + id);
+        cache.remove("avg-student-*");
+        cache.remove("avg-subject-*");
     }
 }

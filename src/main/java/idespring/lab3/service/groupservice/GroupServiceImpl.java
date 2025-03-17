@@ -1,5 +1,6 @@
 package idespring.lab3.service.groupservice;
 
+import idespring.lab3.config.CacheConfig;
 import idespring.lab3.model.Group;
 import idespring.lab3.model.Student;
 import idespring.lab3.repository.grouprepo.GroupRepository;
@@ -11,10 +12,6 @@ import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.cache.annotation.CacheEvict;
-import org.springframework.cache.annotation.CachePut;
-import org.springframework.cache.annotation.Cacheable;
-import org.springframework.cache.annotation.Caching;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -22,19 +19,26 @@ import org.springframework.transaction.annotation.Transactional;
 public class GroupServiceImpl implements GroupService {
     private final GroupRepository groupRepository;
     private final StudentRepository studentRepository;
+    private final CacheConfig<String, Object> cache;
     private static final Logger logger = LoggerFactory.getLogger(GroupServiceImpl.class);
 
     @Autowired
-    public GroupServiceImpl(GroupRepository groupRepository, StudentRepository studentRepository) {
+    public GroupServiceImpl(GroupRepository groupRepository, StudentRepository studentRepository,
+                            CacheConfig<String, Object> cache) {
         this.groupRepository = groupRepository;
         this.studentRepository = studentRepository;
+        this.cache = cache;
     }
 
     @Override
-    @Cacheable(value = "groups", key = "'allGroups' + #namePattern + #sort",
-            unless = "#result == null or #result.isEmpty()")
     public List<Group> readGroups(String namePattern, String sort) {
-        long start = System.nanoTime();
+        String cacheKey = "allGroups" + namePattern + sort;
+        List<Group> cachedGroups = (List<Group>) cache.get(cacheKey);
+        if (cachedGroups != null) {
+            return cachedGroups;
+        }
+
+        final long start = System.nanoTime();
         logger.info("Fetching groups with namePattern: {}, sort: {}", namePattern, sort);
 
         List<Group> groups;
@@ -46,28 +50,40 @@ public class GroupServiceImpl implements GroupService {
             groups = groupRepository.findAll();
         }
 
+        cache.put(cacheKey, groups);
         long end = System.nanoTime();
         logger.info("Execution time for readGroups: {} ms", (end - start) / 1_000_000);
         return groups;
     }
 
     @Override
-    @Cacheable(value = "groups", key = "#id", unless = "#result == null")
     public Group findById(Long id) {
+        String cacheKey = "group_" + id;
+        Group cachedGroup = (Group) cache.get(cacheKey);
+        if (cachedGroup != null) {
+            return cachedGroup;
+        }
+
         long start = System.nanoTime();
         logger.info("Fetching group by ID: {}", id);
 
         Group group = groupRepository.findById(id)
                 .orElseThrow(() -> new EntityNotFoundException("Group not found with id: " + id));
 
+        cache.put(cacheKey, group);
         long end = System.nanoTime();
         logger.info("Execution time for findById: {} ms", (end - start) / 1_000_000);
         return group;
     }
 
     @Override
-    @Cacheable(value = "groups", key = "'name_' + #name", unless = "#result == null")
     public Group findByName(String name) {
+        String cacheKey = "name_" + name;
+        Group cachedGroup = (Group) cache.get(cacheKey);
+        if (cachedGroup != null) {
+            return cachedGroup;
+        }
+
         long start = System.nanoTime();
         logger.info("Fetching group by name: {}", name);
 
@@ -75,41 +91,30 @@ public class GroupServiceImpl implements GroupService {
                 .orElseThrow(() ->
                         new EntityNotFoundException("Group not found with name: " + name));
 
+        cache.put(cacheKey, group);
         long end = System.nanoTime();
         logger.info("Execution time for findByName: {} ms", (end - start) / 1_000_000);
         return group;
     }
 
     @Override
-    @Caching(
-            put = {
-                    @CachePut(value = "groups", key = "#result.id"),
-                    @CachePut(value = "groups", key = "'name_' + #result.name")
-            },
-            evict = {
-                    @CacheEvict(value = "groups", key = "'allGroups*'")
-            }
-    )
     @Transactional
     public Group addGroup(String name, List<Integer> studentIds) {
-        long start = System.nanoTime();
+        final long start = System.nanoTime();
         logger.info("Adding new group: {}", name);
 
         Group group = new Group(name);
         if (studentIds != null && !studentIds.isEmpty()) {
             List<Long> longStudentIds = studentIds.stream().map(Long::valueOf).toList();
-
             List<Student> students = studentRepository.findAllById(longStudentIds);
 
             if (students.size() != studentIds.size()) {
-                Set<Long> foundStudentIds = students.stream().map(Student::getId)
-                        .collect(Collectors.toSet());
+                Set<Long> foundStudentIds =
+                        students.stream().map(Student::getId).collect(Collectors.toSet());
                 List<Long> nonExistentIds = longStudentIds.stream()
-                        .filter(id -> !foundStudentIds.contains(id))
-                        .toList();
-
-                throw new EntityNotFoundException(
-                        "Студенты с ID " + nonExistentIds + " не найдены");
+                        .filter(id -> !foundStudentIds.contains(id)).toList();
+                throw new
+                        EntityNotFoundException("Студенты с ID " + nonExistentIds + " не найдены");
             }
 
             for (Student student : students) {
@@ -119,6 +124,10 @@ public class GroupServiceImpl implements GroupService {
         }
 
         Group savedGroup = groupRepository.save(group);
+        cache.put("group_" + savedGroup.getId(), savedGroup);
+        cache.put("name_" + savedGroup.getName(), savedGroup);
+        cache.put("allGroups", null);
+
         long end = System.nanoTime();
         logger.info("Execution time for addGroup: {} ms", (end - start) / 1_000_000);
         return savedGroup;
@@ -141,8 +150,9 @@ public class GroupServiceImpl implements GroupService {
             throw new EntityNotFoundException("Group with ID " + id + " not found");
         }
 
-        evictGroupCaches(group);
-
+        cache.remove("group_" + id);
+        cache.remove("name_" + group.getName());
+        cache.remove("allGroups");
         groupRepository.deleteById(id);
     }
 
@@ -154,18 +164,10 @@ public class GroupServiceImpl implements GroupService {
             throw new EntityNotFoundException("Group with name " + name + " not found");
         }
 
-        evictGroupCaches(group);
-
+        cache.remove("name_" + name);
+        cache.remove("group_" + group.getId());
+        cache.remove("allGroups");
         groupRepository.deleteByName(name);
     }
-
-    @Caching(evict = {
-            @CacheEvict(value = "groups", key = "#group.id"),
-            @CacheEvict(value = "groups", key = "'name_' + #group.name"),
-            @CacheEvict(value = "groups", key = "'allGroups*'")
-    })
-    protected void evictGroupCaches(Group group) {
-        logger.info("Evicting all caches for group: id={}, name={}",
-                group.getId(), group.getName());
-    }
 }
+
