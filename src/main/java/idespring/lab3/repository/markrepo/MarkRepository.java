@@ -14,8 +14,8 @@ import org.springframework.stereotype.Repository;
 @Repository
 public interface MarkRepository extends JpaRepository<Mark, Long> {
 
-    @Query(value = "SELECT * FROM studentmanagement.marks WHERE studentid = :#{#student.id} "
-            + "AND subjectid = :#{#subject.id}", nativeQuery = true)
+    @Query("SELECT m FROM Mark m JOIN m.student s JOIN m.subject sub "
+            + "WHERE s = :student AND sub = :subject")
     List<Mark> findByStudentAndSubject(@Param("student") Student student,
                                        @Param("subject") Subject subject);
 

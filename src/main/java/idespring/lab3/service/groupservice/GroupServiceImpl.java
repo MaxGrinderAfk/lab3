@@ -5,9 +5,13 @@ import idespring.lab3.model.Group;
 import idespring.lab3.model.Student;
 import idespring.lab3.repository.grouprepo.GroupRepository;
 import idespring.lab3.repository.studentrepo.StudentRepository;
+import idespring.lab3.service.studservice.StudentServiceImpl;
+import jakarta.annotation.PreDestroy;
 import jakarta.persistence.EntityNotFoundException;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,17 +26,30 @@ public class GroupServiceImpl implements GroupService {
     private final CacheConfig<String, Object> cache;
     private static final Logger logger = LoggerFactory.getLogger(GroupServiceImpl.class);
 
+    private static final String GROUP_ID_PREFIX = "group_";
+    private static final String GROUP_NAME_PREFIX = "name_";
+    private static final String ALL_GROUPS_PREFIX = "allGroups";
+
+    private final Set<String> groupCacheKeys = ConcurrentHashMap.newKeySet();
+    private final StudentServiceImpl studentServiceImpl;
+
     @Autowired
     public GroupServiceImpl(GroupRepository groupRepository, StudentRepository studentRepository,
-                            CacheConfig<String, Object> cache) {
+                            CacheConfig<String, Object> cache,
+                            StudentServiceImpl studentServiceImpl) {
         this.groupRepository = groupRepository;
         this.studentRepository = studentRepository;
         this.cache = cache;
+        this.studentServiceImpl = studentServiceImpl;
     }
 
     @Override
     public List<Group> readGroups(String namePattern, String sort) {
-        String cacheKey = "allGroups" + namePattern + sort;
+        String cacheKey = ALL_GROUPS_PREFIX
+                + (namePattern != null ? namePattern : "") + (sort != null ? sort : "");
+
+        groupCacheKeys.add(cacheKey);
+
         List<Group> cachedGroups = (List<Group>) cache.get(cacheKey);
         if (cachedGroups != null) {
             return cachedGroups;
@@ -58,7 +75,10 @@ public class GroupServiceImpl implements GroupService {
 
     @Override
     public Group findById(Long id) {
-        String cacheKey = "group_" + id;
+        String cacheKey = GROUP_ID_PREFIX + id;
+
+        groupCacheKeys.add(cacheKey);
+
         Group cachedGroup = (Group) cache.get(cacheKey);
         if (cachedGroup != null) {
             return cachedGroup;
@@ -78,7 +98,10 @@ public class GroupServiceImpl implements GroupService {
 
     @Override
     public Group findByName(String name) {
-        String cacheKey = "name_" + name;
+        String cacheKey = GROUP_NAME_PREFIX + name;
+
+        groupCacheKeys.add(cacheKey);
+
         Group cachedGroup = (Group) cache.get(cacheKey);
         if (cachedGroup != null) {
             return cachedGroup;
@@ -124,9 +147,17 @@ public class GroupServiceImpl implements GroupService {
         }
 
         Group savedGroup = groupRepository.save(group);
-        cache.put("group_" + savedGroup.getId(), savedGroup);
-        cache.put("name_" + savedGroup.getName(), savedGroup);
-        cache.put("allGroups", null);
+
+        String groupIdKey = GROUP_ID_PREFIX + savedGroup.getId();
+        String groupNameKey = GROUP_NAME_PREFIX + savedGroup.getName();
+
+        cache.put(groupIdKey, savedGroup);
+        cache.put(groupNameKey, savedGroup);
+
+        groupCacheKeys.add(groupIdKey);
+        groupCacheKeys.add(groupNameKey);
+
+        invalidateGroupListCaches();
 
         long end = System.nanoTime();
         logger.info("Execution time for addGroup: {} ms", (end - start) / 1_000_000);
@@ -150,10 +181,31 @@ public class GroupServiceImpl implements GroupService {
             throw new EntityNotFoundException("Group with ID " + id + " not found");
         }
 
-        cache.remove("group_" + id);
-        cache.remove("name_" + group.getName());
-        cache.remove("allGroups");
+        Set<Student> students = studentRepository.findByGroupId(id);
+
+        clearStudentsCache(students);
+
+        String groupIdKey = GROUP_ID_PREFIX + id;
+        String groupNameKey = GROUP_NAME_PREFIX + group.getName();
+
+        cache.remove(groupIdKey);
+        cache.remove(groupNameKey);
+
+        groupCacheKeys.remove(groupIdKey);
+        groupCacheKeys.remove(groupNameKey);
+
+        invalidateGroupListCaches();
+
         groupRepository.deleteById(id);
+    }
+
+    private void clearStudentsCache(Set<Student> students) {
+        for (Student student : students) {
+            studentServiceImpl.clearStudentCache(student.getId());
+            studentServiceImpl.clearCachesByAge(student.getAge());
+            studentServiceImpl.clearListCaches();
+        }
+        logger.info("Cleared student cache for {} students", students.size());
     }
 
     @Transactional
@@ -164,10 +216,53 @@ public class GroupServiceImpl implements GroupService {
             throw new EntityNotFoundException("Group with name " + name + " not found");
         }
 
-        cache.remove("name_" + name);
-        cache.remove("group_" + group.getId());
-        cache.remove("allGroups");
+        Set<Student> students = studentRepository.findByGroupId(group.getId());
+
+        clearStudentsCache(students);
+
+        String groupIdKey = GROUP_ID_PREFIX + group.getId();
+        String groupNameKey = GROUP_NAME_PREFIX + name;
+
+        cache.remove(groupIdKey);
+        cache.remove(groupNameKey);
+
+        groupCacheKeys.remove(groupIdKey);
+        groupCacheKeys.remove(groupNameKey);
+
+        invalidateGroupListCaches();
+
         groupRepository.deleteByName(name);
     }
-}
 
+    private void invalidateGroupListCaches() {
+        logger.debug("Invalidating all group list caches");
+
+        Set<String> keysToRemove = new HashSet<>();
+
+        for (String key : groupCacheKeys) {
+            if (key.startsWith(ALL_GROUPS_PREFIX)) {
+                keysToRemove.add(key);
+                cache.remove(key);
+            }
+        }
+
+        groupCacheKeys.removeAll(keysToRemove);
+    }
+
+    public void invalidateAllGroupCaches() {
+        logger.info("Invalidating all group caches");
+
+        Set<String> keysToRemove = new HashSet<>(groupCacheKeys);
+
+        for (String key : keysToRemove) {
+            cache.remove(key);
+        }
+
+        groupCacheKeys.clear();
+    }
+
+    @PreDestroy
+    public void cleanup() {
+        invalidateAllGroupCaches();
+    }
+}

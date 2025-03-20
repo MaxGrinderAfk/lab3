@@ -112,6 +112,8 @@ public class StudentServiceImpl implements StudentServ {
             studentRepository.addSubject(savedStudent.getId(), subjectId);
         }
 
+        clearRelatedCaches(savedStudent);
+
         long end = System.nanoTime();
         logger.info("Execution time for addStudent: {} ms", (end - start) / 1_000_000);
         return savedStudent;
@@ -120,8 +122,10 @@ public class StudentServiceImpl implements StudentServ {
     @Override
     public void updateStudent(String name, int age, long id) {
         logger.info("Updating student with id: {}", id);
+        Student student = findById(id);
         studentRepository.update(name, age, id);
-        cache.remove(String.valueOf(id));
+        clearStudentCache(id);
+        clearRelatedCaches(student);
         logger.info("Student with id {} updated", id);
     }
 
@@ -130,11 +134,86 @@ public class StudentServiceImpl implements StudentServ {
     public void deleteStudent(long id) {
         logger.info("Deleting student with id: {}", id);
         Student student = studentRepository.findById(id).orElseThrow();
+        final Long groupId = student.getGroup() != null ? student.getGroup().getId() : null;
+        final int age = student.getAge();
+
         student.getSubjects().clear();
         studentRepository.saveAndFlush(student);
         studentRepository.delete(student);
-        cache.remove(String.valueOf(id));
+
+        clearStudentCache(id);
+        clearCachesByAge(age);
+        if (groupId != null) {
+            clearGroupCache(groupId);
+        }
+        clearListCaches();
+
         logger.info("Student with id {} deleted", id);
+    }
+
+    public void clearStudentCache(long id) {
+        cache.remove(String.valueOf(id));
+        logger.info("Cleared cache for student id: {}", id);
+    }
+
+    public void clearGroupCache(Long groupId) {
+        String groupCacheKey = "group-" + groupId;
+        cache.remove(groupCacheKey);
+        cache.remove("students-in-group-" + groupId);
+        logger.info("Cleared cache for group id: {}", groupId);
+    }
+
+
+    public void clearCachesByAge(int age) {
+        List<String> keysToRemove = new ArrayList<>();
+
+        for (int i = 0; i < cache.size(); i++) {
+            String key = age + "-null-null";
+            keysToRemove.add(key);
+
+            key = age + "-asc-null";
+            keysToRemove.add(key);
+
+            key = age + "-desc-null";
+            keysToRemove.add(key);
+        }
+
+        for (String key : keysToRemove) {
+            cache.remove(key);
+        }
+
+        logger.info("Cleared caches for age: {}", age);
+    }
+
+    public void clearListCaches() {
+        List<String> keysToRemove = new ArrayList<>();
+
+        keysToRemove.add("null-null-null");
+        keysToRemove.add("null-asc-null");
+        keysToRemove.add("null-desc-null");
+
+        for (String key : keysToRemove) {
+            cache.remove(key);
+        }
+
+        logger.info("Cleared list caches");
+    }
+
+    private void clearRelatedCaches(Student student) {
+        if (student == null) {
+            return;
+        }
+
+        int age = student.getAge();
+        Long groupId = student.getGroup() != null ? student.getGroup().getId() : null;
+
+        clearCachesByAge(age);
+        if (groupId != null) {
+            clearGroupCache(groupId);
+        }
+        clearListCaches();
+
+        logger.info("Cleared all related caches for student: {}", student.getId());
     }
 }
 

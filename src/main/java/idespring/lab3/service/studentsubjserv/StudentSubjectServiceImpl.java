@@ -32,6 +32,16 @@ public class StudentSubjectServiceImpl implements StudentSubjectService {
         this.cache = cache;
     }
 
+    private void clearCaches(Long studentId, Long subjectId) {
+        cache.remove("subjects-" + studentId);
+        cache.remove("students-" + subjectId);
+
+        cache.remove("student-with-subjects-" + studentId);
+        cache.remove("subject-with-students-" + subjectId);
+
+        logger.debug("Cleared caches for student {} and subject {}", studentId, subjectId);
+    }
+
     @Override
     @Transactional
     public void addSubjectToStudent(Long studentId, Long subjectId) {
@@ -43,8 +53,7 @@ public class StudentSubjectServiceImpl implements StudentSubjectService {
                 .orElseThrow(() -> new EntityNotFoundException(SUBJECT_ERR));
 
         studentRepository.addSubject(studentId, subjectId);
-        cache.remove("subjects-" + studentId);
-        cache.remove("students-" + subjectId);
+        clearCaches(studentId, subjectId);
         logger.info("Subject {} added to student {}", subjectId, studentId);
     }
 
@@ -59,8 +68,7 @@ public class StudentSubjectServiceImpl implements StudentSubjectService {
                 .orElseThrow(() -> new EntityNotFoundException(SUBJECT_ERR));
 
         studentRepository.removeSubject(studentId, subjectId);
-        cache.remove("subjects-" + studentId);
-        cache.remove("students-" + subjectId);
+        clearCaches(studentId, subjectId);
         logger.info("Subject {} removed from student {}", subjectId, studentId);
     }
 

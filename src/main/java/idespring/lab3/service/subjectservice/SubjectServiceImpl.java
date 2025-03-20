@@ -1,10 +1,14 @@
 package idespring.lab3.service.subjectservice;
 
 import idespring.lab3.config.CacheConfig;
+import idespring.lab3.model.Mark;
 import idespring.lab3.model.Subject;
+import idespring.lab3.repository.markrepo.MarkRepository;
 import idespring.lab3.repository.subjectrepo.SubjectRepository;
 import jakarta.persistence.EntityNotFoundException;
 import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -14,14 +18,17 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class SubjectServiceImpl implements SubjectService {
     private final SubjectRepository subjectRepository;
+    private final MarkRepository markRepository;
     private final CacheConfig<String, Object> cache;
     private static final String NOTFOUND = "Subject not found with id: ";
     private static final Logger logger = LoggerFactory.getLogger(SubjectServiceImpl.class);
 
     @Autowired
     public SubjectServiceImpl(SubjectRepository subjectRepository,
+                              MarkRepository markRepository,
                               CacheConfig<String, Object> cache) {
         this.subjectRepository = subjectRepository;
+        this.markRepository = markRepository;
         this.cache = cache;
     }
 
@@ -108,11 +115,12 @@ public class SubjectServiceImpl implements SubjectService {
     @Transactional
     public void deleteSubject(Long id) {
         logger.info("Deleting subject with id: {}", id);
-        if (!subjectRepository.existsById(id)) {
-            throw new EntityNotFoundException(NOTFOUND + id);
-        }
+        Subject subject = subjectRepository.findById(id)
+                .orElseThrow(() -> new EntityNotFoundException(NOTFOUND + id));
+
+        clearCacheForSubject(subject);
+
         subjectRepository.deleteById(id);
-        cache.remove("subject-" + id);
         logger.info("Subject with id {} deleted", id);
     }
 
@@ -120,11 +128,13 @@ public class SubjectServiceImpl implements SubjectService {
     @Transactional
     public void deleteSubjectByName(String name) {
         logger.info("Deleting subject with name: {}", name);
-        if (!subjectRepository.existsByName(name)) {
-            throw new EntityNotFoundException("Subject not found with name: " + name);
-        }
+        Subject subject = subjectRepository.findByName(name)
+                .orElseThrow(() ->
+                        new EntityNotFoundException("Subject not found with name: " + name));
+
+        clearCacheForSubject(subject);
+
         subjectRepository.deleteByName(name);
-        cache.remove("subject-" + name);
         logger.info("Subject with name {} deleted", name);
     }
 
@@ -132,6 +142,30 @@ public class SubjectServiceImpl implements SubjectService {
     public boolean existsByName(String name) {
         logger.info("Checking existence of subject with name: {}", name);
         return subjectRepository.existsByName(name);
+    }
+
+    private void clearCacheForSubject(Subject subject) {
+        Long subjectId = subject.getId();
+
+        cache.remove("subject-" + subjectId);
+        cache.remove("subject-" + subject.getName());
+
+        cache.remove("avg-subject-" + subjectId);
+
+        List<Mark> subjectMarks = markRepository.findBySubjectId(subjectId);
+
+        Set<Long> affectedStudentIds = subjectMarks.stream()
+                .map(mark -> mark.getStudent().getId())
+                .collect(Collectors.toSet());
+
+        for (Long studentId : affectedStudentIds) {
+            cache.remove("marks-" + studentId + "-" + subjectId);
+            cache.remove("avg-student-" + studentId);
+        }
+
+        for (Mark mark : subjectMarks) {
+            cache.remove("mark-" + mark.getId());
+        }
     }
 }
 
